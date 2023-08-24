@@ -46,6 +46,8 @@ parser.add_argument('--step_size', default=10, type=int,
 parser.add_argument('--momentum', default=.9, type=float, help='momentum')
 parser.add_argument('--weight_decay', default=1e-4, type=float,
                     help='weight decay ')
+parser.add_argument('--mps', default=False, type=bool,
+                    help='Use MPS acceleration')
 
 
 FLAGS, FIRE_FLAGS = parser.parse_known_args()
@@ -70,7 +72,7 @@ def set_gpus(n=1):
         [str(i) for i in gpus['index'].iloc[:n]])
 
 
-if FLAGS.ngpus > 0:
+if FLAGS.ngpus > 0 and FLAGS.mps is False:
     set_gpus(FLAGS.ngpus)
 
 
@@ -85,7 +87,10 @@ def get_model(pretrained=False):
     if FLAGS.ngpus == 0:
         model = model.module  # remove DataParallel
     if FLAGS.ngpus > 0:
-        model = model.cuda()
+        if FLAGS.mps:
+            model = model.to(torch.device('mps'))
+        else:
+            model = model.cuda()
     return model
 
 
@@ -131,10 +136,10 @@ def train(restore_path=None,  # useful when you want to restart training
             data_load_time = time.time() - data_load_start
             global_step = epoch * len(trainer.data_loader) + step
 
-            if save_val_steps is not None:
-                if global_step in save_val_steps:
-                    results[validator.name] = validator()
-                    trainer.model.train()
+            # if save_val_steps is not None:
+            #     if global_step in save_val_steps:
+            #         results[validator.name] = validator()
+            #         trainer.model.train()
 
             if FLAGS.output_path is not None:
                 records.append(results)
@@ -246,7 +251,10 @@ class ImageNetTrain(object):
         self.lr = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=FLAGS.step_size)
         self.loss = nn.CrossEntropyLoss()
         if FLAGS.ngpus > 0:
-            self.loss = self.loss.cuda()
+            if FLAGS.mps:
+                self.loss.to(device=torch.device('mps'))
+            else:
+                self.loss = self.loss.cuda()
 
     def data(self):
         dataset = torchvision.datasets.ImageFolder(
@@ -269,7 +277,12 @@ class ImageNetTrain(object):
 
         self.lr.step(epoch=frac_epoch)
         if FLAGS.ngpus > 0:
-            target = target.cuda(non_blocking=True)
+            if FLAGS.mps:
+                inp = inp.to(device=torch.device('mps'))
+                target = target.to(device=torch.device('mps'))
+            else:
+                inp = inp.cuda(non_blocking=True)
+                target = target.cuda(non_blocking=True)
         output = self.model(inp)
 
         record = {}
@@ -296,7 +309,10 @@ class ImageNetVal(object):
         self.data_loader = self.data()
         self.loss = nn.CrossEntropyLoss(size_average=False)
         if FLAGS.ngpus > 0:
-            self.loss = self.loss.cuda()
+            if FLAGS.mps:
+                self.loss = self.loss.to(device=torch.device('mps'))
+            else:
+                self.loss = self.loss.cuda(non_blocking=True)
 
     def data(self):
         dataset = torchvision.datasets.ImageFolder(
@@ -322,7 +338,16 @@ class ImageNetVal(object):
         with torch.no_grad():
             for (inp, target) in tqdm.tqdm(self.data_loader, desc=self.name):
                 if FLAGS.ngpus > 0:
-                    target = target.cuda(non_blocking=True)
+                    if FLAGS.mps:
+                        inp = inp.to(device=torch.device('mps'))
+                        target = target.to(device=torch.device('mps'))
+                    else:
+                        inp = inp.cuda(non_blocking=True)
+                        target = target.cuda(non_blocking=True)
+                        
+                # print("\n######", inp.device, "######\n")
+                # print("\n######", self.model.module.V1.conv1.weight.device, "######\n")
+                
                 output = self.model(inp)
 
                 record['loss'] += self.loss(output, target).item()

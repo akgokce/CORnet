@@ -50,8 +50,7 @@ class CORblock_RT(nn.Module):
     def forward(self, inp=None, state=None, batch_size=None):
         if inp is None:  # at t=0, there is no input yet except to V1
             inp = torch.zeros([batch_size, self.out_channels, self.out_shape, self.out_shape])
-            if self.conv_input.weight.is_cuda:
-                inp = inp.cuda()
+            inp = inp.to(self.conv_input.weight.device)
         else:
             inp = self.conv_input(inp)
             inp = self.norm_input(inp)
